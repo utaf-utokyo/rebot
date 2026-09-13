@@ -1,0 +1,16 @@
+# ROS 2 workspace build artifacts
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# vcs-imported external ROS2 packages (fetched via ros2_ws/rebot.repos, not vendored in git)
+ros2_ws/src/external/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv*/
+
+# OS
+.DS_Store
