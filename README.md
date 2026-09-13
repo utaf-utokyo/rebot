@@ -34,17 +34,24 @@ B601-DM
 rebot/
 ├── README.md
 ├── docs/
-│   └── architecture.md         # 設計ドキュメント（本体）
+│   └── architecture.md          # 設計ドキュメント（本体）
 ├── ros2_ws/
-│   ├── rebot.repos             # vcstool: 外部ROS2パッケージの取得定義
+│   ├── rebot.repos              # vcstool: 外部リポジトリの取得定義
 │   └── src/
-│       └── quest_rebot_bridge/ # 新規実装（唯一の自作ROS2パッケージ）
-├── external/
-│   └── reBotArm_control_py/    # git submodule（pip installはしない）
+│       ├── quest_rebot_bridge/  # 新規実装（唯一の自作ROS2パッケージ）
+│       └── external/            # vcs import で取得（.gitignore対象、gitには含めない）
+│           ├── IsaacTeleop/
+│           └── reBotArmController_ROS2/
+│               └── third_party/
+│                   └── reBotArm_control_py/  # コントローラ側コードが要求する固定path
 └── tools/
-    └── xr_pose_smoke_test.py   # Quest→CloudXR→isaacteleopの単体疎通確認
-                                 # （本番ROS2実装とは独立、ROS2化しない）
+    └── xr_pose_smoke_test.py    # Quest→CloudXR→isaacteleopの単体疎通確認
+                                  # （本番ROS2実装とは独立、ROS2化しない）
 ```
+
+`reBotArm_control_py` は git submodule ではなく `rebot.repos` で
+`reBotArmController_ROS2/third_party/reBotArm_control_py` に直接 vcs import
+する（理由は [docs/architecture.md](docs/architecture.md) 参照）。
 
 ## ブランチ運用
 

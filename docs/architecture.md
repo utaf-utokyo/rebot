@@ -10,7 +10,7 @@ Meta Quest 3 → ROS 2 (Jazzy) → reBot Arm B601-DM (Damiao motor版) の
 | [NVIDIA/IsaacTeleop](https://github.com/NVIDIA/IsaacTeleop) | `release/1.3.x` の `examples/teleop_ros2` を直接ビルド | Quest 3 controller pose/button → ROS 2 topic/TF publish |
 | ~~NVIDIA-ISAAC-ROS/isaac_ros_teleop~~ | **不採用** | 中身は IsaacTeleop の `examples/teleop_ros2/python/teleop_ros2_node.py` を ament_cmake でラップしただけ。humanoid(G1) 向け `pose_reset_node` や重い依存が単腕 reBot には不要 |
 | [Seeed-Projects/reBotArmController_ROS2](https://github.com/Seeed-Projects/reBotArmController_ROS2) | `main` | B601-DM ROS 2 driver 本体（topic/service/action、URDF、状態機械） |
-| [Seeed-Projects/reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py) | git submodule として vendor（pip installはしない） | Pinocchio IK/FK + `motorbridge` による Damiao 実モータ制御ライブラリ |
+| [Seeed-Projects/reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py) | `rebot.repos` で `third_party/reBotArm_control_py` に vcs import（pip installはしない） | Pinocchio IK/FK + `motorbridge` による Damiao 実モータ制御ライブラリ |
 
 ### IsaacTeleop のバージョン選定
 
@@ -163,8 +163,35 @@ flowchart TD
   実際の依存（`pin`=Pinocchio, `motorbridge`）は cp312 aarch64 wheel が存在し、
   このGX10上で実地動作確認済み（`sim2real-rebot-devarm` の smoke test）。
   ただし `pip install -e .` はパッケージング不備（flat-layout エラー）で
-  失敗するため、**pip install はせず git submodule + `PYTHONPATH` 追加で
-  vendor する**運用とする。
+  失敗するため、pip install はしない。
+
+### reBotArm_control_py の配置場所（M0で確定した事実）
+
+`reBotArmController_ROS2` の実装（`hardware_config.py`）は、Pythonパッケージ
+解決を **決め打ちの相対パス**で行っている:
+
+- `_ensure_rebot_sdk_in_syspath()` が `third_party/reBotArm_control_py`
+  ディレクトリ（内部に `reBotArm_control_py/` パッケージ本体を含む）を要求し、
+  `sys.path.insert(0, ...)` する。
+- `_workspace_root()` は `hardware_config.py` 自身の実行時パスから親ディレクトリを
+  順に遡り、`third_party/reBotArm_control_py` を含む最初の祖先ディレクトリを探す。
+- したがって **`colcon build --symlink-install` が必須**（コピーインストールだと
+  `install/` 配下にコピーされたファイルの祖先を遡っても `third_party/` が
+  見つからない）。
+- 配置先は `ros2_ws/src/external/reBotArmController_ROS2` の直下
+  （リポジトリチェックアウトの兄弟ディレクトリ）である必要がある
+  （`hardware_config.py:33-38, 41-52` で確認済み）。
+
+`reBotArmController_ROS2` 自身の README / エラーメッセージは
+`https://github.com/vectorBH6/reBotArm_control_py.git` のフォークをクローンする
+よう指示しているが、**実際に両者を diff した結果 Seeed-Projects/reBotArm_control_py
+(main) の方が新しい**（IK/joint limits修正のPR #29、`gravity_compensation.py`
+controllerがフォーク側に無い、など）。そのため本リポジトリでは
+**Seeed-Projects の canonical repo を採用**し、`rebot.repos` で直接
+`third_party/reBotArm_control_py` に vcs import する（git submoduleは使わない。
+理由: `ros2_ws/src/external/` 配下は vcstool 管理下で `.gitignore` 対象のため、
+その内部にさらに独立した submodule を持たせても本リポジトリの git 履歴には
+反映されず、`rebot.repos` に一本化した方が再現性が高いため）。
 
 ## 8. リポジトリ構成
 
@@ -173,29 +200,24 @@ rebot/
 ├── README.md
 ├── docs/architecture.md
 ├── ros2_ws/
-│   ├── rebot.repos              # vcstool: IsaacTeleop(release/1.3.x), reBotArmController_ROS2
+│   ├── rebot.repos              # vcstool: IsaacTeleop, reBotArmController_ROS2, reBotArm_control_py
 │   └── src/
-│       └── quest_rebot_bridge/  # 新規実装（唯一の自作ROS2パッケージ）
-├── external/
-│   └── reBotArm_control_py/     # git submodule, PYTHONPATH経由で利用（pip installしない）
+│       ├── quest_rebot_bridge/  # 新規実装（唯一の自作ROS2パッケージ）
+│       └── external/            # vcs import で取得、.gitignore対象
+│           ├── IsaacTeleop/
+│           └── reBotArmController_ROS2/
+│               └── third_party/reBotArm_control_py/
 └── tools/
     └── xr_pose_smoke_test.py    # sim2real-rebot-devarmから移植した独立ツール（ROS2化しない）
 ```
 
-`ros2_ws/src/external/`（`rebot.repos` で vcs import される IsaacTeleop /
-reBotArmController_ROS2）は `.gitignore` で除外し、git には含めない。
-
-**M0での確認事項**: `rebotarmcontroller` が `reBotArm_control_py` を
-どう解決するか（`sys.path` 操作／pip install 済みパッケージ名／
-sibling directory 前提など）は実装コードから断定できていない。
-`external/reBotArm_control_py` を submodule 追加した上で、実際に
-`colcon build` / node 起動を試して解決方法を確定させる。
+`ros2_ws/src/external/`（`rebot.repos` で vcs import される3リポジトリすべて）
+は `.gitignore` で除外し、git には含めない。
 
 ## 9. Milestone 計画
 
-- **M0**: ROS 2 Jazzy install、`rebot.repos` で外部 repo 取得、
-  `external/reBotArm_control_py` を submodule 追加、colcon build、
-  Python 3.12 / aarch64 の実地検証
+- **M0**: ROS 2 Jazzy install、`vcs import < rebot.repos`（3リポジトリ）、
+  `colcon build --symlink-install`、Python 3.12 / aarch64 の実地検証
 - **M1**: `teleop_ros2_node.py` 単体起動 →
   `ros2 topic echo /xr_teleop/controller_data`、
   `ros2 run tf2_ros tf2_echo world right_wrist` で右コントローラの

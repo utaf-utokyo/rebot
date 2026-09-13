@@ -1,0 +1,26 @@
+repositories:
+  src/external/IsaacTeleop:
+    type: git
+    url: https://github.com/NVIDIA/IsaacTeleop.git
+    version: release/1.3.x
+  src/external/reBotArmController_ROS2:
+    type: git
+    url: https://github.com/Seeed-Projects/reBotArmController_ROS2.git
+    version: main
+  # NOT a ROS2 package (no package.xml) -- vcs-imported here only because
+  # reBotArmController_ROS2/src/rebotarmcontroller/rebotarmcontroller/hardware_config.py
+  # hardcodes this exact relative path (third_party/reBotArm_control_py) and does
+  # `sys.path.insert(0, ...)` on it at runtime. Must build with
+  # `colcon build --symlink-install` so the installed hardware_config.py stays a
+  # symlink back here (a copy-install would break the parent-directory walk-up
+  # this path resolution relies on).
+  #
+  # Seeed-Projects/reBotArm_control_py (main) is used instead of the
+  # vectorBH6/reBotArm_control_py fork referenced in reBotArmController_ROS2's own
+  # README/error message: as of this writing Seeed-Projects/main is AHEAD of that
+  # fork (includes an IK/joint-limits fix, PR #29, and a gravity_compensation.py
+  # controller the fork lacks) -- verified by diffing both clones directly.
+  src/external/reBotArmController_ROS2/third_party/reBotArm_control_py:
+    type: git
+    url: https://github.com/Seeed-Projects/reBotArm_control_py.git
+    version: main
