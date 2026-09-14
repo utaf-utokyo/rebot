@@ -6,6 +6,9 @@ ros2_ws/log/
 # vcs-imported external ROS2 packages (fetched via ros2_ws/rebot.repos, not vendored in git)
 ros2_ws/src/external/
 
+# vendor motor debugging tool (DMTool, cloned separately, not part of this project)
+assemble_rebot/
+
 # Python
 __pycache__/
 *.pyc

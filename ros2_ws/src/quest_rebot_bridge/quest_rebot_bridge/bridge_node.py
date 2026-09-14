@@ -1,12 +1,15 @@
-"""quest_rebot_bridge ROS 2 node -- Milestone 2 scope.
+"""quest_rebot_bridge ROS 2 node -- Milestone 4/5 scope.
 
 Subscribes to xr_teleop/controller_data (published by
 controller_raw_publisher), applies a squeeze-to-engage clutch and
-relative-pose scaling/limits, and publishes a target end-effector pose.
+relative-pose scaling/limits, publishes a target end-effector pose, and
+calls rebotarmcontroller's move_to_pose_ik service with that same target.
 
-It never sends a command that would move real hardware -- that starts at
-Milestone 4, once Milestones 3 has been validated and the user has
-explicitly allowed it.
+move_to_pose_ik is non-blocking on the rebotarmcontroller side (it just
+updates the internal target that an already-running 500Hz control loop
+tracks), so it is safe to call every frame. If IK fails, rebotarmcontroller
+itself leaves its internal target unchanged (the arm holds its last good
+pose) -- this node does not need to replicate that logic, only log it.
 
 Frames:
   quest_world -- raw OpenXR/CloudXR controller tracking origin, as decoded
@@ -42,6 +45,8 @@ from tf2_ros import (
 )
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
+
+from rebotarm_msgs.srv import MoveToPoseIK
 
 from quest_rebot_bridge.clutch import Clutch, Pose
 from quest_rebot_bridge.controller_data_codec import controller_sample, decode_controller_data
@@ -113,7 +118,10 @@ class QuestRebotBridgeNode(Node):
             ByteMultiArray, controller_data_topic, self._on_controller_data, 10
         )
         self.create_timer(_STALE_CHECK_PERIOD_S, self._check_stale)
-
+        arm_namespace = self._declare_str("arm_namespace", "rebotarm")
+        self._move_ik_client = self.create_client(
+            MoveToPoseIK, f"/{arm_namespace}/move_to_pose_ik"
+        )
         self.get_logger().info(
             f"quest_rebot_bridge_node up: side={self._arm_side} "
             f"controller_data={controller_data_topic} target_pose={target_pose_topic} "
@@ -181,9 +189,47 @@ class QuestRebotBridgeNode(Node):
         if self._last_target_time is not None:
             dt_s = (now - self._last_target_time).nanoseconds * 1e-9
         target = self._safety_limits.clamp(self._last_target, proposed, dt_s)
-        self._last_target = target
         self._last_target_time = now
         self._publish_target(target)
+        self._call_move_to_pose_ik(target)
+
+    def _call_move_to_pose_ik(self, pose: Pose) -> None:
+        if not self._move_ik_client.service_is_ready():
+            self.get_logger().warn(
+                "move_to_pose_ik service not available -- target not sent to hardware",
+                throttle_duration_sec=2.0,
+            )
+            return
+        req = MoveToPoseIK.Request()
+        req.target_pose.position.x, req.target_pose.position.y, req.target_pose.position.z = (
+            pose.position
+        )
+        qx, qy, qz, qw = pose.orientation
+        req.target_pose.orientation.x = qx
+        req.target_pose.orientation.y = qy
+        req.target_pose.orientation.z = qz
+        req.target_pose.orientation.w = qw
+        future = self._move_ik_client.call_async(req)
+        future.add_done_callback(
+            lambda f: self._on_move_ik_response(f, pose)
+        )
+
+    def _on_move_ik_response(self, future, pose: Pose) -> None:
+        try:
+            response = future.result()
+        except Exception as exc:
+            self.get_logger().warn(f"move_to_pose_ik call failed: {exc}", throttle_duration_sec=2.0)
+            return
+        if not response.success:
+            self.get_logger().warn(
+                f"move_to_pose_ik rejected: {response.message}", throttle_duration_sec=1.0
+            )
+            return
+        # Only commit the new reference once the arm has actually accepted
+        # it -- otherwise a run of IK failures would let _last_target drift
+        # further and further from where the arm truly is, since each
+        # subsequent frame's delta is computed against it regardless.
+        self._last_target = pose
 
     def _check_stale(self) -> None:
         if self._last_msg_time is None or not self._clutch.engaged:
