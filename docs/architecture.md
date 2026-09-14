@@ -361,3 +361,79 @@ M4 に到達し、ユーザーが明示的に許可するまでは `move_to_pose
   （reBot側の関節はその場保持）
 - clutch OFF 時停止: squeeze が閾値未満になった瞬間、target 更新を停止し
   アームは最後の target を保持
+
+## 11. 実行コマンド集（M0〜M3、再現用）
+
+GX10でのセットアップは完了済み。新しいシェル/セッションから再現する場合の
+コマンド一覧。
+
+### 環境の前提（インストール済み）
+
+- ROS 2 Jazzy: `sudo apt install ros-jazzy-desktop ros-dev-tools python3-colcon-common-extensions python3-rosdep python3-vcstool`
+- 追加apt: `ros-jazzy-control-msgs ros-jazzy-tf-transformations ros-jazzy-rosbridge-server ros-jazzy-joint-state-publisher-gui python3-msgpack`
+- `~/rebot/.venv-teleop-ros2`（`controller_raw_publisher`専用、system-site-packages有効）:
+  ```
+  source /opt/ros/jazzy/setup.bash
+  python3 -m venv --system-site-packages ~/rebot/.venv-teleop-ros2
+  source ~/rebot/.venv-teleop-ros2/bin/activate
+  pip install "isaacteleop[cloudxr,retargeters]~=1.3.131" msgpack msgpack-numpy
+  ```
+  （`bridge_node`/M3のnodeはこのvenv不要。システムのROS2 Pythonだけで動く）
+
+### ワークスペース取得・ビルド
+
+```
+cd ~/rebot/ros2_ws
+vcs import . < rebot.repos   # rebot.repos内のpathは既に "src/..." 込みなので "." から実行
+rosdep install --from-paths src/external/reBotArmController_ROS2/src/rebotarmcontroller \
+  src/external/reBotArmController_ROS2/src/rebotarm_msgs \
+  src/external/reBotArmController_ROS2/src/rebotarm_bringup \
+  src/quest_rebot_bridge \
+  --ignore-src -y --rosdistro jazzy --skip-keys "ament_python"
+colcon build --symlink-install --packages-select rebotarmcontroller rebotarm_msgs rebotarm_bringup quest_rebot_bridge
+```
+
+### M1: controller_raw_publisher（Questのコントローラpose/squeeze/triggerを確認）
+
+```
+source /opt/ros/jazzy/setup.bash
+source ~/rebot/.venv-teleop-ros2/bin/activate
+cd ~/rebot/ros2_ws/src/quest_rebot_bridge
+python3 -m quest_rebot_bridge.controller_raw_publisher
+```
+（別ターミナルでQuest 3をCloudXR経由で接続してから
+`ros2 topic hz /xr_teleop/controller_data` 等で確認）
+
+### M2: bridge_node（squeeze clutch → target pose）
+
+```
+# 1. calibration TF + bridge_node（システムROS2 Pythonのみ、venv不要）
+source /opt/ros/jazzy/setup.bash
+source ~/rebot/ros2_ws/install/setup.bash
+ros2 launch quest_rebot_bridge bridge.launch.py
+
+# 2. controller_raw_publisher は別途M1と同様に起動しておく
+```
+`/right_arm/target_pose` を `ros2 topic echo` で確認。
+
+### M3: reBot ROS 2 stack の非実機dry validation
+
+```
+source /opt/ros/jazzy/setup.bash
+source ~/rebot/ros2_ws/install/setup.bash
+ros2 launch quest_rebot_bridge rebot_dry_bringup.launch.py
+```
+`rebotarmcontroller`は起動しない。`ros2 topic echo /joint_states`、
+`ros2 run tf2_ros tf2_echo base_link gripper_link` で確認。
+
+### 既知のはまりポイント（再掲）
+
+- `vcs import` は必ずワークスペースルート(`ros2_ws/`)から `.` を指定して実行する
+  （`rebot.repos` の key に既に `src/...` が含まれるため、`vcs import src` とすると
+  `src/src/...` の二重pathになる）。
+- 新規ament_pythonパッケージを追加した直後は、`ros2 run`からパッケージが見えない
+  ことがある（egg-info/buildの古いキャッシュ）。
+  `rm -rf build/<pkg> install/<pkg>` してから`colcon build --symlink-install`し直す。
+- `tf2_ros.Buffer.transform(PoseStamped, ...)` を使うコードは
+  `import tf2_geometry_msgs`（型登録の副作用目的、直接は未使用）が無いと
+  実行時に`TypeException`で落ちる。

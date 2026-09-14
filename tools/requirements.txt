@@ -1,0 +1,2 @@
+isaacteleop[cloudxr]~=1.3.131
+numpy
