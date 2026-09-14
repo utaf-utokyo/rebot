@@ -39,6 +39,7 @@ rebot/
 │   ├── rebot.repos              # vcstool: 外部リポジトリの取得定義
 │   └── src/
 │       ├── quest_rebot_bridge/  # 新規実装（唯一の自作ROS2パッケージ）
+│       │   └── quest_rebot_bridge/controller_raw_publisher.py  # M1で実装済み
 │       └── external/            # vcs import で取得（.gitignore対象、gitには含めない）
 │           ├── IsaacTeleop/
 │           └── reBotArmController_ROS2/
@@ -76,7 +77,7 @@ clutch OFF時停止）の詳細設計は [docs/architecture.md](docs/architectur
 | # | 内容 | 状態 |
 |---|---|---|
 | M0 | 環境構築（ROS 2 Jazzy install, 外部repo取得, colcon build） | 完了 |
-| M1 | Quest controller data を ROS 2 topic として取得（reBot未起動） | 進行中 |
+| M1 | Quest controller data を ROS 2 topic として取得（reBot未起動） | 完了 |
 | M2 | `quest_rebot_bridge` で target pose を計算・publish（実機未接続） | 未着手 |
 | M3 | reBot ROS 2 stack を非実機で起動し joint_states/TF/robot model 確認 | 未着手 |
 | M4 | Quest抜き・固定小 target pose で実機 command 経路を検証 | 未着手 |

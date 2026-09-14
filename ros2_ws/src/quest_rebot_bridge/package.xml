@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>quest_rebot_bridge</name>
+  <version>0.1.0</version>
+  <description>
+    Bridges Meta Quest 3 controller input (via the isaacteleop/CloudXR SDK)
+    to ROS 2, and (in later milestones) to reBot Arm B601-DM Cartesian
+    teleoperation commands.
+  </description>
+  <maintainer email="kojumaru52@gmail.com">kojumaru</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <!--
+    isaacteleop, msgpack and msgpack-numpy are pip-only dependencies with no
+    rosdep key. They must be installed in a --system-site-packages venv that
+    also has rclpy visible (see docs/architecture.md, M0/M1). Not declared
+    here since rosdep cannot resolve them.
+  -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

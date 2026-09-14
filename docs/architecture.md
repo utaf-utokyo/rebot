@@ -54,6 +54,33 @@ SDK・msgpackのみに依存する素のPythonスクリプト群（`teleop_ros2_
 実行時は `source /opt/ros/jazzy/setup.bash` と venv の `activate` を**両方**
 sourceする必要がある（`rclpy`はROS2側のPYTHONPATH経由、isaacteleop等はvenv側）。
 
+### 重要: `teleop_ros2_node.py` はそのまま使わず、自作ノードに置き換えた（M1で判明）
+
+実機のQuest 3で接続検証したところ、`teleop_ros2_node.py` は
+`session.step()` を `execution_events` 引数なしで呼んでおり、
+`isaacteleop==1.3.131` の実際の挙動では内部の `deviceio_session` が
+`None` のまま残り、毎ステップ `AttributeError: 'NoneType' object has no
+attribute 'update'` を起こし続けてCloudXRセッションを不安定化させる
+（Quest側で接続後数秒で切断される症状として現れた）ことを、
+最小再現スクリプトで実際に確認した。
+
+一方、既に動作実績のある `tools/xr_pose_smoke_test.py` は
+`session.step(execution_events=ExecutionEvents(execution_state=ExecutionState.RUNNING, reset=False))`
+と明示的に渡しており問題なく動作する。`release/1.3.x` タグのreference実装と
+pip版 `isaacteleop==1.3.131` の間にAPI挙動のズレがあると判断し、
+**`teleop_ros2_node.py` を直接実行するのはやめた**。
+
+代わりに `quest_rebot_bridge/quest_rebot_bridge/controller_raw_publisher.py`
+（本リポジトリの新規実装）を作成した。中身は
+`ControllersSource` + `TeleopSession` という同じSDKプリミティブを使うが、
+`execution_events` を明示的に渡す検証済みの呼び出しパターンを採用し、
+`xr_teleop/controller_data` トピックへのpublish内容
+（フィールド名・msgpackエンコーディング）はNVIDIA版と互換に保っている
+（`std_msgs/ByteMultiArray`、要素1バイトずつのタプル、
+`msgpack.packb(..., default=mnp.encode)`）。
+実機のQuest 3 Touch Plusコントローラで60Hz付近の安定したpublishと、
+squeeze/trigger/grip pose/aim poseの正しいデコードを確認済み（M1完了）。
+
 ### mode選択: `controller_raw` を採用
 
 `teleop_ros2_node.py` の `mode` パラメータは以下の4種:
@@ -254,6 +281,8 @@ rebot/
 │   ├── rebot.repos              # vcstool: IsaacTeleop, reBotArmController_ROS2, reBotArm_control_py
 │   └── src/
 │       ├── quest_rebot_bridge/  # 新規実装（唯一の自作ROS2パッケージ）
+│       │   └── quest_rebot_bridge/
+│       │       └── controller_raw_publisher.py  # M1: xr_teleop/controller_data publisher
 │       └── external/            # vcs import で取得、.gitignore対象
 │           ├── IsaacTeleop/
 │           └── reBotArmController_ROS2/
@@ -261,6 +290,13 @@ rebot/
 └── tools/
     └── xr_pose_smoke_test.py    # sim2real-rebot-devarmから移植した独立ツール（ROS2化しない）
 ```
+
+**既知のビルド上の注意**: `quest_rebot_bridge`の初回`colcon build`で、
+`install/quest_rebot_bridge`にament_indexリソースマーカーが生成されず
+`ros2 run`からパッケージが見えない事象が発生した。原因はegg-info/buildの
+古いキャッシュで、`rm -rf build/quest_rebot_bridge install/quest_rebot_bridge`
+してから`colcon build --symlink-install`し直せば解消する
+（新規ament_pythonパッケージ追加時は一度クリーンビルドを試す）。
 
 `ros2_ws/src/external/`（`rebot.repos` で vcs import される3リポジトリすべて）
 は `.gitignore` で除外し、git には含めない。
@@ -271,9 +307,10 @@ rebot/
   `isaacteleop[cloudxr,retargeters]~=1.3.131` 用 venv 構築と
   `teleop_ros2_node.py` の import 確認（完了）、
   `colcon build --symlink-install`（reBotArmController_ROS2側、未実施）
-- **M1**: `teleop_ros2_node.py --ros-args -p mode:=controller_raw` を
-  venv上で起動 → `ros2 topic echo /xr_teleop/controller_data` で
-  右コントローラの grip pose/squeeze/trigger を確認（reBot は未起動）
+- **M1（完了）**: `quest_rebot_bridge`の`controller_raw_publisher`ノードを
+  venv上で起動 → 実機Quest 3で接続し、`/xr_teleop/controller_data`が
+  約59Hzで安定publishされ、grip/aim pose・squeeze・trigger・ボタン・
+  thumbstick・is_activeが正しくデコードできることを確認（reBotは未起動）
 - **M2**: `quest_rebot_bridge` 実装（clutch → 相対pose → 座標変換 →
   safety limit）。自前 topic に publish し `ros2 topic echo` / RViz で
   確認（**`move_to_pose_ik` はまだ呼ばない**）
