@@ -17,12 +17,18 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <exec_depend>tf_transformations</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <!--
-    isaacteleop, msgpack and msgpack-numpy are pip-only dependencies with no
-    rosdep key. They must be installed in a --system-site-packages venv that
-    also has rclpy visible (see docs/architecture.md, M0/M1). Not declared
-    here since rosdep cannot resolve them.
+    controller_raw_publisher additionally needs isaacteleop and msgpack-numpy,
+    pip-only packages with no rosdep key, in a venv (system site packages
+    enabled) that also has rclpy visible (see docs/architecture.md, M0/M1).
+    Not declared here since rosdep cannot resolve them. bridge_node.py (this
+    package's other node) only needs plain msgpack (python3-msgpack, apt)
+    plus the ROS deps above, so it runs under the system ROS 2 Python.
   -->
 
   <export>

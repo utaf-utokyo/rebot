@@ -1,3 +1,5 @@
+import glob
+
 from setuptools import find_packages, setup
 
 package_name = "quest_rebot_bridge"
@@ -9,6 +11,7 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
+        ("share/" + package_name + "/launch", glob.glob("launch/*.launch.py")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -24,6 +27,7 @@ setup(
         "console_scripts": [
             "controller_raw_publisher = "
             "quest_rebot_bridge.controller_raw_publisher:main",
+            "bridge_node = quest_rebot_bridge.bridge_node:main",
         ],
     },
 )

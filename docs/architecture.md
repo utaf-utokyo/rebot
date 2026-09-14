@@ -298,6 +298,11 @@ rebot/
 してから`colcon build --symlink-install`し直せば解消する
 （新規ament_pythonパッケージ追加時は一度クリーンビルドを試す）。
 
+`bridge_node.py`で`tf2_ros.Buffer.transform(PoseStamped, ...)`を使うには
+`import tf2_geometry_msgs`（型登録のためのside-effect import、直接は未使用）
+が必須。忘れると`TypeException: Type ... PoseStamped ... is not loaded or
+supported`で実行時に落ちる（M2で実際に踏んだ）。
+
 `ros2_ws/src/external/`（`rebot.repos` で vcs import される3リポジトリすべて）
 は `.gitignore` で除外し、git には含めない。
 
@@ -311,9 +316,11 @@ rebot/
   venv上で起動 → 実機Quest 3で接続し、`/xr_teleop/controller_data`が
   約59Hzで安定publishされ、grip/aim pose・squeeze・trigger・ボタン・
   thumbstick・is_activeが正しくデコードできることを確認（reBotは未起動）
-- **M2**: `quest_rebot_bridge` 実装（clutch → 相対pose → 座標変換 →
-  safety limit）。自前 topic に publish し `ros2 topic echo` / RViz で
-  確認（**`move_to_pose_ik` はまだ呼ばない**）
+- **M2（完了）**: `quest_rebot_bridge` の `bridge_node` 実装（clutch → 相対pose
+  → 座標変換 → safety limit）。`/right_arm/target_pose` に publish し、実機
+  Quest 3 で squeeze engage/release・相対追従・workspace clamp（z軸を
+  0.0-0.6m に制限）が正しく動作することを確認（**`move_to_pose_ik` はまだ
+  呼んでいない**、reBot自体も未起動）
 - **M3**: `robot_state_publisher` + `joint_state_publisher_gui` のみで
   URDF/TF を確認（`rebotarmcontroller` 本体・実機接続なし）
 - **M4**: Quest 抜きで固定小 target pose を `move_to_pose_ik` に直接送り、
