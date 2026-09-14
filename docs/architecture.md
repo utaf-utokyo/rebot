@@ -157,10 +157,12 @@ GRIP pose を使っている。`xr_teleop/ee_poses` は AIM pose のため、
 `rate: 500`(内部制御ループHz), `urdf_path: urdf/DM/urdf/ReBot_Arm_DM.urdf` が
 明示的に設定されている。
 
-**要確認事項（M3で確認）**: `bringup.launch.py` の URDF 選択ロジックは
-`rs` とそれ以外の2分岐のみで、グリッパー付き URDF
-(`description/urdf/reBot_B601_DM_with_gripper.urdf`) が実際に使われているかは
-未確認。RViz で目視確認する。
+**M3で確認済み（upstreamの不具合）**: `bringup.launch.py` の URDF 選択ロジックは
+`rs` とそれ以外の2分岐のみで、`dm` を選んでもグリッパー無しの
+`reBot-DevArm_fixend.urdf` になってしまい、実際のグリッパー付き B601-DM とは
+異なるモデルが使われる。本リポジトリでは
+`quest_rebot_bridge/launch/rebot_dry_bringup.launch.py` で
+`reBot_B601_DM_with_gripper.urdf` を直接指定することで回避している。
 
 ### アーキテクチャ
 
@@ -321,8 +323,19 @@ supported`で実行時に落ちる（M2で実際に踏んだ）。
   Quest 3 で squeeze engage/release・相対追従・workspace clamp（z軸を
   0.0-0.6m に制限）が正しく動作することを確認（**`move_to_pose_ik` はまだ
   呼んでいない**、reBot自体も未起動）
-- **M3**: `robot_state_publisher` + `joint_state_publisher_gui` のみで
-  URDF/TF を確認（`rebotarmcontroller` 本体・実機接続なし）
+- **M3（完了）**: `robot_state_publisher` + `joint_state_publisher_gui`
+  のみで（`rebotarmcontroller` 本体は起動せず、実機接続なし）
+  `reBot_B601_DM_with_gripper.urdf` の joint_states / TF / robot model を確認。
+  **重要な発見**: `rebotarm_bringup`の`bringup.launch.py`は`model`パラメータが
+  `rs`以外だと常に`reBot-DevArm_fixend.urdf`（グリッパー無し・終端固定の別モデル）
+  を選択してしまい、DM+gripperの実機とは異なる。B601-DM+gripperを正しく使うには
+  `reBot_B601_DM_with_gripper.urdf`を明示的に指定する必要がある
+  （本リポジトリの`quest_rebot_bridge/launch/rebot_dry_bringup.launch.py`が
+  これを行う）。このURDFの終端リンク名は`end_link`ではなく**`gripper_link`**
+  （joint名: joint1-6, gripper_joint/gripper_joint1/gripper_joint2）。
+  `bridge_node`の`ee_frame`デフォルトをこれに合わせて更新済み。
+  ゼロ姿勢でのbase_link→gripper_link TFは並進[0.26, 0, 0.192]m、
+  回転はX軸180°（URDFのSolidWorksエクスポート起因、動作に支障なし）。
 - **M4**: Quest 抜きで固定小 target pose を `move_to_pose_ik` に直接送り、
   実機小規模動作を検証（safety limit 実地確認）— **要ユーザー許可**
 - **M5**: Quest 接続、低速・小スケール・clutch 必須の片腕テレオペ初回 —

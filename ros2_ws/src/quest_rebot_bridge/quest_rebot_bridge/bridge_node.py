@@ -17,9 +17,11 @@ Frames:
                  separately -- see launch/bridge.launch.py. Also folds in
                  the OpenXR RUB -> robot-frame axis convention change, since
                  that's just part of the same fixed SE(3) transform.
-  end_link    -- reBot Arm end-effector frame. Once rebotarmcontroller +
-                 robot_state_publisher are running (Milestone 3+), this is
-                 looked up via TF; until then, the `home_position` /
+  gripper_link -- reBot Arm B601-DM+gripper end-effector frame (confirmed via
+                 M3: robot_state_publisher + joint_state_publisher_gui on the
+                 real reBot_B601_DM_with_gripper.urdf, no hardware attached).
+                 Once rebotarmcontroller + robot_state_publisher are running,
+                 this is looked up via TF; until then, the `home_position` /
                  `home_orientation` parameters are used as a placeholder
                  clutch-engage reference so this node is testable standalone.
 """
@@ -60,7 +62,7 @@ class QuestRebotBridgeNode(Node):
             "target_pose_topic", f"/{self._arm_side}_arm/target_pose"
         )
         self._base_frame = self._declare_str("base_frame", "base_link")
-        self._ee_frame = self._declare_str("ee_frame", "end_link")
+        self._ee_frame = self._declare_str("ee_frame", "gripper_link")
         self._quest_world_frame = self._declare_str("quest_world_frame", "quest_world")
 
         self._squeeze_engage = self._declare_float("squeeze_engage_threshold", 0.5)
