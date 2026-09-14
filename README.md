@@ -75,8 +75,8 @@ clutch OFF時停止）の詳細設計は [docs/architecture.md](docs/architectur
 
 | # | 内容 | 状態 |
 |---|---|---|
-| M0 | 環境構築（ROS 2 Jazzy install, 外部repo取得, colcon build） | 進行中 |
-| M1 | Quest controller data を ROS 2 topic/TF として取得（reBot未起動） | 未着手 |
+| M0 | 環境構築（ROS 2 Jazzy install, 外部repo取得, colcon build） | 完了 |
+| M1 | Quest controller data を ROS 2 topic として取得（reBot未起動） | 進行中 |
 | M2 | `quest_rebot_bridge` で target pose を計算・publish（実機未接続） | 未着手 |
 | M3 | reBot ROS 2 stack を非実機で起動し joint_states/TF/robot model 確認 | 未着手 |
 | M4 | Quest抜き・固定小 target pose で実機 command 経路を検証 | 未着手 |

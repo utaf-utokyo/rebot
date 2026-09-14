@@ -25,8 +25,57 @@ reBot 専用ページが存在するが、**B601-RS (RobStride) 専用で B601-D
 
 ## 2. NVIDIA側が publish する ROS 2 topic/message/TF
 
-`examples/teleop_ros2/python/teleop_ros2_node.py`（`release/1.3.x`,
-`mode=controller_teleop`, デフォルト `rate_hz=60`）が publish するもの:
+### 重要: `examples/teleop_ros2` は colcon ビルド対象ではない（M0で判明）
+
+`IsaacTeleop/examples/teleop_ros2` には `package.xml` が存在せず、`CMakeLists.txt`
+はIsaacTeleop本体（C++ SDK全体、CloudXR/OpenXR/pluginsを含む大規模プロジェクト）
+の一部としてビルドされる前提になっている。フルビルドはPython 3.11固定・`uv`管理の
+重量級C++ビルドで、今回のM0スコープには不要かつ過剰。
+
+**実際に採用する方法**: `examples/teleop_ros2/python/` 配下は rclpy・isaacteleop
+SDK・msgpackのみに依存する素のPythonスクリプト群（`teleop_ros2_node.py` 他6ファイル）
+であることをソース確認済み。IsaacTeleop本体をビルドせず、この`python/`ディレクトリを
+`PYTHONPATH`に追加し、既に動作実績のある pip wheel install
+（`isaacteleop[cloudxr]~=1.3.131`）の上でそのまま `python3 teleop_ros2_node.py`
+として直接実行する。
+
+**追加で必要な extra（実地確認済み）**: `session_config.py` が `DexHandRetargeter`
+（`isaacteleop.retargeters`）を**モードに関係なくトップレベルでimport**しており、
+`isaacteleop[cloudxr]`のみでは
+`ModuleNotFoundError: DexHandRetargeter requires additional dependencies`
+で起動時に落ちる。`controller_raw`モード（後述、finger retargeting不要）を使う
+場合でも **`isaacteleop[cloudxr,retargeters]~=1.3.131`** のインストールが必要
+（バージョン固定は変わらず、extraを追加しただけ。GX10 aarch64 / Python 3.12で
+インストール・importとも実地確認済み）。
+
+**venv構成**: `rclpy`（ROS2 Jazzy提供）を使うため、
+`python3 -m venv --system-site-packages` で作成した venv 上に
+`isaacteleop[cloudxr,retargeters]~=1.3.131 msgpack msgpack-numpy` を pip install する。
+実行時は `source /opt/ros/jazzy/setup.bash` と venv の `activate` を**両方**
+sourceする必要がある（`rclpy`はROS2側のPYTHONPATH経由、isaacteleop等はvenv側）。
+
+### mode選択: `controller_raw` を採用
+
+`teleop_ros2_node.py` の `mode` パラメータは以下の4種:
+
+| mode | publishされるtopic |
+|---|---|
+| `controller_teleop`（デフォルト） | ee_poses, root_twist, root_pose, head_pose, finger_joints（TriHand既定）, controller_data, tf |
+| `hand_teleop` | ee_poses, hand, finger_joints, root_twist/root_pose, head_pose, tf |
+| **`controller_raw`** | **`controller_data` のみ** |
+| `full_body` | full_body, controller_data |
+
+本プロジェクトの `quest_rebot_bridge` は `controller_data` 内の
+grip_position/grip_orientation/squeeze/trigger のみを使い、`ee_poses`（AIM pose）や
+`tf`（wrist frame）、`finger_joints`（グリッパーではなく多指ハンド向け）は不要。
+そのため **`--ros-args -p mode:=controller_raw`** を採用し、不要なpublish処理と
+TriHand/Sharpa関連のオーバーヘッドを避ける。Quest座標系→reBot base座標系の変換に
+必要な static transform（`base_link -> quest_world`）は `teleop_ros2_node` の
+`/tf` publishには依存せず、`quest_rebot_bridge` 側で
+`static_transform_publisher` 等を用いて別途持つ。
+
+以下は `mode=controller_teleop`（デフォルト値、比較用）での完全な仕様。
+`controller_raw` ではこのうち `controller_data` のみが実際に飛んでくる:
 
 | Topic | 型 | 内容 |
 |---|---|---|
@@ -152,9 +201,11 @@ flowchart TD
 
 - IsaacTeleop `examples/teleop_ros2/Dockerfile` は `ROS_DISTRO=jazzy`,
   `PYTHON_VERSION=3.12`, `TARGETARCH=arm64` 分岐（nlopt ソースビルド）を
-  明記している。ただしデフォルトの `controller_teleop` モードは
-  nlopt/dexpilot（ヒューマノイド手向け retargeter）を必要としないため、
-  この分岐は今回関係ない。
+  明記しているが、**本プロジェクトはこのDockerビルド／C++ソースビルド経路を
+  使わない**（上記の通り `examples/teleop_ros2/python/` を pip wheel +
+  PYTHONPATH で直接実行するため）。M0でGX10 aarch64 / Python 3.12 /
+  ROS 2 Jazzy上で `isaacteleop[cloudxr,retargeters]~=1.3.131` のinstallと
+  `teleop_ros2_node.py` のimportが問題なく通ることを実地確認済み。
 - `reBotArmController_ROS2` の `package.xml` には配布ディストロ指定タグが
   存在せず、README記載（Humble/Jazzy対応）はコード上未検証。依存関係自体は
   ディストロ非依存なので Jazzy でも動作する見込み。
@@ -216,12 +267,13 @@ rebot/
 
 ## 9. Milestone 計画
 
-- **M0**: ROS 2 Jazzy install、`vcs import < rebot.repos`（3リポジトリ）、
-  `colcon build --symlink-install`、Python 3.12 / aarch64 の実地検証
-- **M1**: `teleop_ros2_node.py` 単体起動 →
-  `ros2 topic echo /xr_teleop/controller_data`、
-  `ros2 run tf2_ros tf2_echo world right_wrist` で右コントローラの
-  pose/squeeze を確認（reBot は未起動）
+- **M0**: ROS 2 Jazzy install（完了）、`vcs import < rebot.repos`（3リポジトリ、完了）、
+  `isaacteleop[cloudxr,retargeters]~=1.3.131` 用 venv 構築と
+  `teleop_ros2_node.py` の import 確認（完了）、
+  `colcon build --symlink-install`（reBotArmController_ROS2側、未実施）
+- **M1**: `teleop_ros2_node.py --ros-args -p mode:=controller_raw` を
+  venv上で起動 → `ros2 topic echo /xr_teleop/controller_data` で
+  右コントローラの grip pose/squeeze/trigger を確認（reBot は未起動）
 - **M2**: `quest_rebot_bridge` 実装（clutch → 相対pose → 座標変換 →
   safety limit）。自前 topic に publish し `ros2 topic echo` / RViz で
   確認（**`move_to_pose_ik` はまだ呼ばない**）
