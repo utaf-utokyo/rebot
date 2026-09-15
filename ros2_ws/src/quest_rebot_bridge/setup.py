@@ -29,6 +29,8 @@ setup(
             "quest_rebot_bridge.controller_raw_publisher:main",
             "bridge_node = quest_rebot_bridge.bridge_node:main",
             "fake_ik_driver = quest_rebot_bridge.fake_ik_driver:main",
+            "moveit_ik_bridge = quest_rebot_bridge.moveit_ik_bridge:main",
+            "quest_world_calibrate = quest_rebot_bridge.quest_world_calibrate:main",
         ],
     },
 )

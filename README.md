@@ -83,7 +83,7 @@ clutch OFF時停止）の詳細設計は [docs/architecture.md](docs/architectur
 | M4 | Quest抜き・固定小 target pose で実機 command 経路を検証 | **完了** |
 | M5 | Quest接続、低速・小スケール・clutch必須の片腕テレオペ初回 | **試行中（下記参照）** |
 
-## 現在の状態（2026-09-14時点）と再開手順
+## 現在の状態（2026-09-15時点）と再開手順
 
 **M4完了。M5（Quest実接続でのテレオペ）を試行したが、シミュレーション上で
 腕が反応せず未達成。** 以下、次回再開時の要点。
@@ -131,13 +131,60 @@ clutch OFF時停止）の詳細設計は [docs/architecture.md](docs/architectur
   (b) `quest_world`の実キャリブレーションを行う（位置よりも回転が重要 —
   clutchは相対追従のみ使うため）、を優先する。
 
+### 2026-09-15セッション: MoveItリハーサル環境・Aボタンリセット・キャリブレーションツール
+
+- `fake_ik_driver`（無ビジュアル・IKソルバーのみ）の代わりに、
+  `reBotArmController_ROS2`同梱の`rebotarm_moveit_config`（MoveIt 2、
+  `model:=dm`がデフォルトで実機と同じ`reBot_B601_DM_with_gripper.urdf`＋
+  `gripper_link`終端を使用、既存パッケージで新規実装不要）をRViz可視化つき
+  リハーサル環境として採用。`ros-jazzy-moveit`一式をapt導入し、
+  `rebotarm_moveit_config`/`rebotarm_moveit_demos`をビルド済み。
+- 新規ノード`moveit_ik_bridge`（`quest_rebot_bridge`）: `fake_ik_driver`と同じ
+  IKソルバーを使うが、結果を`rebotarm_moveit_config`のros2_control
+  mock hardware（`/rebotarm_controller/joint_trajectory`）に送ることで
+  RViz上に反映させる。`/rebotarm/move_to_pose_ik`を公開し、`bridge_node`の
+  デフォルト`arm_namespace`（`rebotarm`）とそのまま噛み合う。
+  まとめ起動用に`launch/moveit_rehearsal.launch.py`を追加。
+  単体サービス呼び出しでのIK→`/joint_states`反映は確認済み。
+- `bridge_node`にAボタン（右手コントローラ、左手なら X）での
+  ホームリセット機能を追加。押すとclutchを解除し、
+  `home_position`/`home_orientation`へ既存の`safety_limits`のステップ制限
+  （急な飛びなし）で戻る。squeeze再握りで即キャンセル。
+  合成`controller_data`でのエンドツーエンドテスト済み。
+- 新規ツール`quest_world_calibrate`: `quest_world → base_link`の**回転のみ**を
+  較正する対話式ノード。数式で確認済み: `Clutch.compute_target()`は差分
+  （`c - r`）しか使わないため、剛体変換の並進成分は差分計算で必ず打ち消される
+  → 並進オフセットはteleopの向き・スケールに一切影響しない
+  （`calib_x/y/z`は0のままでよい）。手順はロボット正面(+X)方向へ
+  コントローラを構えてAボタン2秒長押し→算出した`calib_qx/qy/qz/qw`を
+  `bridge.launch.py`に渡す。
+- **新たな未解決事象**: 上記環境で実際にQuest 3を接続し、bridge_node経由で
+  squeezeを握って動かしてみたが、**RViz上で全く動かなかった**（M5当初の
+  「見た目の反応なし」と同じ現象で、方向が違うのではなく無反応）。
+  原因未特定。次回確認すべき候補:
+  - `_transform_to_base()`（quest_world→base_link）が失敗して即
+    force-release されていないか（`bridge_node`のログで
+    "transform unavailable" / "clutch force-released" を確認）
+  - `move_to_pose_ik`呼び出しがIK非収束で毎回`success=False`になっていないか
+    （`_on_move_ik_response`の warn ログを確認）
+  - `squeeze_engage_threshold=0.5`に対し実機の`squeeze_value`が閾値に届いて
+    いるか（Questのグリップボタンの効き方次第では届かない可能性）
+  - **ハマりどころ**: `moveit_ik_bridge`や`bridge_node`を複数プロセス
+    多重起動すると同じサービス名を取り合って誰にも正しく届かなくなる。
+    再現時は`ps aux | grep -E "moveit_ik_bridge|bridge_node"`で
+    重複がないか必ず確認してから切り分けること。
+
 ### 既存の実装・検証済み環境（このまま使える）
 
 - `ros2_ws/`: `colcon build --symlink-install`済み
-  （`rebotarmcontroller`, `rebotarm_msgs`, `rebotarm_bringup`, `quest_rebot_bridge`）
+  （`rebotarmcontroller`, `rebotarm_msgs`, `rebotarm_bringup`, `quest_rebot_bridge`,
+  `rebotarm_moveit_config`, `rebotarm_moveit_demos`）
   — `rebotarmcontroller`/`quest_rebot_bridge`は`motorbridge`/`pin`依存のため
   `.venv-motorbridge`を有効化した状態でビルドする必要がある
   （`sys.executable`経由のcolcon実行、詳細は`docs/architecture.md`）。
+  `ros-jazzy-moveit`一式（`ros-jazzy-moveit`, `ros-jazzy-controller-manager`,
+  `ros-jazzy-joint-state-broadcaster`, `ros-jazzy-joint-trajectory-controller`,
+  `ros-jazzy-ros2-control(lers)`, `ros-jazzy-rviz2`ほか）をaptで導入済み。
 - `~/rebot/.venv-teleop-ros2/`: `python3 -m venv --system-site-packages`で作成、
   `isaacteleop[cloudxr,retargeters]~=1.3.131 msgpack msgpack-numpy`をpip install済み
   （`controller_raw_publisher`用。詳細は[docs/architecture.md](docs/architecture.md)）

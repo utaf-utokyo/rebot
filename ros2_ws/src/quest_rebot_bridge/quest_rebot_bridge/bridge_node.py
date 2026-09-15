@@ -5,6 +5,13 @@ controller_raw_publisher), applies a squeeze-to-engage clutch and
 relative-pose scaling/limits, publishes a target end-effector pose, and
 calls rebotarmcontroller's move_to_pose_ik service with that same target.
 
+The controller's primary button (A on the right controller, X on the left)
+releases the clutch and drives the arm back to home_position/home_orientation,
+one safety_limits-clamped step at a time via the same _HOMING_STEP_PERIOD_S
+timer used for stale-input checks -- so the return respects the same
+translation/rotation/velocity limits as teleop, rather than jumping. Squeezing
+again (clutch re-engage) cancels an in-progress home reset.
+
 move_to_pose_ik is non-blocking on the rebotarmcontroller side (it just
 updates the internal target that an already-running 500Hz control loop
 tracks), so it is safe to call every frame. If IK fails, rebotarmcontroller
@@ -31,8 +38,11 @@ Frames:
 
 from __future__ import annotations
 
+import math
+
 import rclpy
 import tf2_geometry_msgs  # noqa: F401 -- registers PoseStamped for Buffer.transform()
+import tf_transformations as tft
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.time import Time
@@ -53,6 +63,10 @@ from quest_rebot_bridge.controller_data_codec import controller_sample, decode_c
 from quest_rebot_bridge.safety_limits import SafetyLimits, SafetyLimitsConfig
 
 _STALE_CHECK_PERIOD_S = 0.1
+_HOMING_STEP_PERIOD_S = 0.05
+_HOMING_POSITION_TOLERANCE_M = 0.005
+_HOMING_ROTATION_TOLERANCE_RAD = 0.02
+_PRIMARY_CLICK_THRESHOLD = 0.5
 
 
 class QuestRebotBridgeNode(Node):
@@ -109,6 +123,8 @@ class QuestRebotBridgeNode(Node):
         self._last_target: Pose | None = None
         self._last_target_time: Time | None = None
         self._last_msg_time: Time | None = None
+        self._homing = False
+        self._prev_primary_click = False
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -118,6 +134,7 @@ class QuestRebotBridgeNode(Node):
             ByteMultiArray, controller_data_topic, self._on_controller_data, 10
         )
         self.create_timer(_STALE_CHECK_PERIOD_S, self._check_stale)
+        self.create_timer(_HOMING_STEP_PERIOD_S, self._homing_step)
         arm_namespace = self._declare_str("arm_namespace", "rebotarm")
         self._move_ik_client = self.create_client(
             MoveToPoseIK, f"/{arm_namespace}/move_to_pose_ik"
@@ -157,7 +174,13 @@ class QuestRebotBridgeNode(Node):
 
         if not sample.is_active:
             self._force_release("controller inactive")
+            self._prev_primary_click = False
             return
+
+        primary_pressed = sample.primary_click >= _PRIMARY_CLICK_THRESHOLD
+        if primary_pressed and not self._prev_primary_click:
+            self._start_homing()
+        self._prev_primary_click = primary_pressed
 
         controller_pose_quest = Pose(
             position=sample.grip_position, orientation=sample.grip_orientation
@@ -170,6 +193,7 @@ class QuestRebotBridgeNode(Node):
             return
 
         if sample.squeeze >= self._squeeze_engage and not self._clutch.engaged:
+            self._homing = False
             ee_pose = self._lookup_ee_pose()
             self._clutch.engage(controller_pose_base, ee_pose)
             self._last_target = ee_pose
@@ -230,6 +254,34 @@ class QuestRebotBridgeNode(Node):
         # further and further from where the arm truly is, since each
         # subsequent frame's delta is computed against it regardless.
         self._last_target = pose
+
+    # -- home reset (A/X button) -----------------------------------------
+
+    def _start_homing(self) -> None:
+        if self._clutch.engaged:
+            self.get_logger().info("clutch released -- home reset requested")
+        self._clutch.release()
+        self._homing = True
+        self.get_logger().info("home reset requested (primary button)")
+
+    def _homing_step(self) -> None:
+        if not self._homing:
+            return
+        now = self.get_clock().now()
+        dt_s = 0.0
+        if self._last_target_time is not None:
+            dt_s = (now - self._last_target_time).nanoseconds * 1e-9
+        current = self._last_target if self._last_target is not None else self._lookup_ee_pose()
+        target = self._safety_limits.clamp(current, self._home_pose, dt_s)
+        self._last_target_time = now
+        self._publish_target(target)
+        self._call_move_to_pose_ik(target)
+        if _pose_close(
+            target, self._home_pose,
+            _HOMING_POSITION_TOLERANCE_M, _HOMING_ROTATION_TOLERANCE_RAD,
+        ):
+            self._homing = False
+            self.get_logger().info("home reset complete")
 
     def _check_stale(self) -> None:
         if self._last_msg_time is None or not self._clutch.engaged:
@@ -299,6 +351,16 @@ class QuestRebotBridgeNode(Node):
         msg.pose.orientation.z = qz
         msg.pose.orientation.w = qw
         self._target_pub.publish(msg)
+
+
+def _pose_close(a: Pose, b: Pose, pos_tol_m: float, rot_tol_rad: float) -> bool:
+    dist = math.sqrt(sum((x - y) ** 2 for x, y in zip(a.position, b.position)))
+    if dist > pos_tol_m:
+        return False
+    delta_quat = tft.quaternion_multiply(tft.quaternion_inverse(a.orientation), b.orientation)
+    w = max(-1.0, min(1.0, abs(delta_quat[3])))
+    angle = 2.0 * math.acos(w)
+    return angle <= rot_tol_rad
 
 
 def _pose_from_msg(pose) -> Pose:

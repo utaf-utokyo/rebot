@@ -15,6 +15,7 @@ class ControllerSample:
     squeeze: float
     trigger: float
     is_active: bool
+    primary_click: float  # A (right controller) / X (left controller)
 
 
 def decode_controller_data(msg: ByteMultiArray) -> dict:
@@ -29,4 +30,5 @@ def controller_sample(data: dict, side: str) -> ControllerSample:
         squeeze=float(data[f"{side}_squeeze_value"]),
         trigger=float(data[f"{side}_trigger_value"]),
         is_active=bool(data[f"{side}_is_active"]),
+        primary_click=float(data[f"{side}_primary_click"]),
     )

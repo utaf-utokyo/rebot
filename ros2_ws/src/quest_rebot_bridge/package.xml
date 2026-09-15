@@ -25,6 +25,9 @@
   <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>rebotarm_bringup</exec_depend>
   <exec_depend>rebotarm_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <!--
     controller_raw_publisher additionally needs isaacteleop and msgpack-numpy,
