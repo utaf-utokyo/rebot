@@ -639,6 +639,61 @@ Wi-Fi/CloudXR側の遅延はこの値には現れない（SDK呼び出しが返�
 打刻するため）ため、Quest本体からPCまでの区間の遅延を分離して見たい場合は
 別途ネットワーク側の計測が必要。
 
+### 実機Quest + dual_arm_rehearsal での動作確認手順（2026-09-26）
+
+**実行方法**（ターミナル2つ。`bridge.launch.py`/`moveit_rehearsal.launch.py`
+は不要 -- `dual_arm_rehearsal.launch.py`単体でシミュレータ・RViz・
+bridge_node（左右分）まで全部起動する）:
+
+```bash
+# ターミナル1: シミュレータ本体 + RViz
+source /opt/ros/jazzy/setup.bash
+source ~/rebot/ros2_ws/install/setup.bash
+ros2 launch quest_rebot_bridge dual_arm_rehearsal.launch.py \
+  2>&1 | tee ~/rebot/logs/$(date +%H%M%S)_dual_arm.log
+```
+
+```bash
+# ターミナル2: controller_raw_publisher（isaacteleop venv、Questと接続）
+source /opt/ros/jazzy/setup.bash
+source ~/rebot/.venv-teleop-ros2/bin/activate
+cd ~/rebot/ros2_ws/src/quest_rebot_bridge
+python3 -m quest_rebot_bridge.controller_raw_publisher \
+  2>&1 | tee ~/rebot/logs/$(date +%H%M%S)_controller_raw.log
+```
+
+同じ`ROS_DOMAIN_ID`を両ターミナルで使うこと（未設定なら両方未設定のままでも可、
+どちらか一方だけ`export ROS_DOMAIN_ID=...`していると互いに見えなくなる）。
+
+**CloudXRクライアント（Quest側）の接続設定**: 自動探索（mDNS的な近隣デバイス
+発見）は今回の大学Wi-Fiでは機能しなかった。**Server IPとPortを両方手動入力**
+する必要がある:
+- Port は固定で `48322`（`~/.cloudxr/logs/wss.*.log`の
+  `WSS proxy listening on port ...`で確認可能）。Portを空欄のままだと
+  既定の別ポートを試みて繋がらない。
+- Server IP はPC側で`ip -4 addr show <wifi_if>`（例:`wlP9s9`）で確認した
+  現在のアドレス。ネットワークを切り替えるたびに変わるので都度確認し直す。
+
+**ネットワークの注意点（ラグの原因と対策）**: 大学Wi-Fiのような混雑した
+共有ネットワークでは、同一ネットワーク内の機器同士でもping遅延が実測で
+9〜312msまで跳ね上がることがあり、これがテレオペの「常に一定の遅延がある」
+という体感の主因になり得る（CloudXRなどのリアルタイムストリーミング系の
+実装はジッターバッファでこれを吸収するため、ジッターが"一定のやや大きい遅延"
+に変換されて感じられやすい）。
+
+対策として、QuestとPCを**専用の空いているネットワーク**に繋ぐのが最も効く。
+今回はスマホのテザリング（モバイルホットスポット）に両方繋いで解決した。
+Quest⇔PC間の通信はインターネットに出て行かず、映像ストリーミングもしていない
+（`controller_raw`モードは姿勢・ボタン情報のみ）ため、テザリングの携帯データ
+消費量はほぼ気にしなくてよい。
+
+**注意**: このPCのようにWi-Fiカードが1枚しかない環境では、テザリング等の
+別ネットワークに繋ぎ替えている間、元のネットワーク（大学Wi-Fi）からは
+完全に切断される。このPC自体をWi-Fiアクセスポイント化する案も検討したが、
+その間このPCの他の通信（SSH、リモート作業ツールなど、大学Wi-Fi経由の
+インターネット接続に依存するもの）も道連れで切断されるリスクがあるため
+見送り、スマホのテザリングを採用した。
+
 ### 死んだ姿勢追従コードの削除（2026-09-26）
 
 姿勢を鉛直下向きに固定する方針への変更（上記）により、`Clutch`の
