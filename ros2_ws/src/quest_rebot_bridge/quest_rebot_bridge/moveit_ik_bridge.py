@@ -14,6 +14,17 @@ same reBotArm_control_py solver/URDF/joint limits as the real driver, then
 publishes a single-point JointTrajectory to rebotarm_controller (the
 ros2_control mock_components/GenericSystem hardware spawned by
 demo.launch.py). No real motion, ever.
+
+Also provides gripper/open and gripper/close (matching bridge_node's
+trigger-driven gripper control) by publishing to the demo's separate
+gripper_controller/joint_trajectory (gripper_joint1/gripper_joint2, URDF
+range [0, 0.0715]m). Unlike the real rebotarmcontroller, request.position is
+ignored here -- the real gripper's "position" is in radians on a single
+motor-driven DOF (rebotarm_hardware.yaml: [-5.0, 0.0]) which doesn't
+correspond 1:1 to this URDF's two linear finger joints, so this is a rough
+visual approximation (same open-fraction idea, own units) rather than a
+faithful unit conversion. Good enough to visually confirm the open/close
+wiring in RViz; not meant to predict the real gripper's exact travel.
 """
 
 from __future__ import annotations
@@ -38,9 +49,16 @@ from reBotArm_control_py.kinematics.robot_model import (  # noqa: E402
     pad_q_for_model,
 )
 
-from rebotarm_msgs.srv import MoveToPoseIK  # noqa: E402
+from rebotarm_msgs.srv import GripperCommand, MoveToPoseIK  # noqa: E402
+
+from quest_rebot_bridge.node_diagnostics import warn_if_duplicate_node
 
 _JOINT_NAMES = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+_GRIPPER_JOINT_NAMES = ["gripper_joint1", "gripper_joint2"]
+_HEARTBEAT_PERIOD_S = 1.0
+# rebotarm_moveit_config's URDF: gripper_joint1/2 are prismatic, range [0, 0.0715]m.
+_GRIPPER_SIM_CLOSE_M = 0.0
+_GRIPPER_SIM_FULL_OPEN_M = 0.0715
 
 
 class MoveItIKBridge(Node):
@@ -51,7 +69,11 @@ class MoveItIKBridge(Node):
         trajectory_topic = self._declare_str(
             "joint_trajectory_topic", "/rebotarm_controller/joint_trajectory"
         )
+        gripper_trajectory_topic = self._declare_str(
+            "gripper_joint_trajectory_topic", "/gripper_controller/joint_trajectory"
+        )
         self._time_from_start_s = self._declare_float("time_from_start_s", 0.15)
+        self._gripper_open_fraction = self._declare_float("gripper_open_fraction", 1.0 / 3.0)
 
         urdf_path = str(_SDK_ROOT / "urdf" / "DM" / "urdf" / "ReBot_Arm_DM.urdf")
         self._model = load_robot_model(urdf_path=urdf_path)
@@ -60,14 +82,32 @@ class MoveItIKBridge(Node):
         self._ik_params = IKParams()
         self._q = pad_q_for_model(self._model, np.zeros(6), 6)
 
+        self._call_count = 0
+        self._success_count = 0
+        self._last_result_ok: bool | None = None
+
         self._trajectory_pub = self.create_publisher(
             JointTrajectory, trajectory_topic, 10
+        )
+        self._gripper_trajectory_pub = self.create_publisher(
+            JointTrajectory, gripper_trajectory_topic, 10
         )
         self.create_service(
             MoveToPoseIK,
             f"/{arm_namespace}/move_to_pose_ik",
             self._on_move_to_pose_ik,
         )
+        self.create_service(
+            GripperCommand,
+            f"/{arm_namespace}/gripper/open",
+            self._make_gripper_handler(_GRIPPER_SIM_FULL_OPEN_M * self._gripper_open_fraction, "open"),
+        )
+        self.create_service(
+            GripperCommand,
+            f"/{arm_namespace}/gripper/close",
+            self._make_gripper_handler(_GRIPPER_SIM_CLOSE_M, "close"),
+        )
+        self.create_timer(_HEARTBEAT_PERIOD_S, self._log_heartbeat)
         self.get_logger().info(
             f"moveit_ik_bridge up: service=/{arm_namespace}/move_to_pose_ik "
             f"-> trajectory_topic={trajectory_topic} "
@@ -83,6 +123,7 @@ class MoveItIKBridge(Node):
         return float(self.get_parameter(name).value)
 
     def _on_move_to_pose_ik(self, request, response):
+        self._call_count += 1
         p = request.target_pose.position
         o = request.target_pose.orientation
         target_pos = np.array([p.x, p.y, p.z])
@@ -94,6 +135,12 @@ class MoveItIKBridge(Node):
             self._q.copy(), self._ik_params, controlled_joints=6,
         )
         if not result.success:
+            self._last_result_ok = False
+            self.get_logger().warn(
+                f"IK did not converge (err={result.error:.4g}) for target "
+                f"pos={target_pos.tolist()}",
+                throttle_duration_sec=1.0,
+            )
             response.success = False
             response.message = f"IK did not converge (err={result.error:.4g})"
             response.q_solution = []
@@ -101,10 +148,42 @@ class MoveItIKBridge(Node):
 
         self._q = pad_q_for_model(self._model, result.q[:6], 6)
         self._publish_trajectory(self._q[:6])
+        self._success_count += 1
+        self._last_result_ok = True
         response.success = True
         response.message = "IK target accepted (SIMULATED via rebotarm_moveit_config)"
         response.q_solution = [float(v) for v in result.q[:6]]
         return response
+
+    def _make_gripper_handler(self, target_m: float, label: str):
+        def handler(request, response):
+            self._publish_gripper_trajectory(target_m)
+            response.success = True
+            response.reached_position = target_m
+            response.message = f"gripper {label} SIMULATED (target={target_m:.4f}m)"
+            return response
+        return handler
+
+    def _publish_gripper_trajectory(self, target_m: float) -> None:
+        msg = JointTrajectory()
+        msg.joint_names = _GRIPPER_JOINT_NAMES
+        point = JointTrajectoryPoint()
+        point.positions = [target_m, target_m]
+        seconds = int(self._time_from_start_s)
+        point.time_from_start = Duration(
+            sec=seconds,
+            nanosec=int((self._time_from_start_s - seconds) * 1e9),
+        )
+        msg.points = [point]
+        self._gripper_trajectory_pub.publish(msg)
+
+    def _log_heartbeat(self) -> None:
+        self.get_logger().info(
+            "[heartbeat] "
+            f"calls_total={self._call_count} success_total={self._success_count} "
+            f"last_result_ok={self._last_result_ok}"
+        )
+        warn_if_duplicate_node(self, "moveit_ik_bridge")
 
     def _publish_trajectory(self, q: np.ndarray) -> None:
         msg = JointTrajectory()

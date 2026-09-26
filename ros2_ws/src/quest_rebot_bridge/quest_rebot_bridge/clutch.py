@@ -1,18 +1,25 @@
-"""Squeeze-to-engage relative pose clutch.
+"""Squeeze-to-engage position clutch.
 
 squeeze OFF: reBot does not move.
 squeeze ON (rising edge): stores the current Quest controller pose (in
 base_link frame) and the current reBot EE pose as the reference pair.
 squeeze held: reBot EE tracks the *relative* displacement of the controller
-since engage, applied on top of the reference EE pose (scaled).
+since engage, applied on top of the reference EE position (scaled).
 squeeze OFF: clutch releases; the last commanded target pose is held.
+
+Orientation is not tracked here at all -- compute_target() carries the
+reference EE orientation through unchanged as a placeholder; bridge_node.py's
+_pointing_pose() always overrides it with a fixed pose (see that module's
+docstring). Clutch used to also support absolute/relative controller-tracked
+orientation modes with a configurable controller-to-tool axis mapping, but
+that machinery was deleted (2026-09-26) once the fixed-orientation policy
+made it permanently dead code -- see git history around 2026-09-17 for the
+removed design.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-import tf_transformations as tft
 
 
 @dataclass
@@ -35,15 +42,13 @@ class Clutch:
     def release(self) -> None:
         self.engaged = False
 
-    def compute_target(
-        self,
-        controller_pose: Pose,
-        translation_scale: float,
-        rotation_scale: float,
-    ) -> Pose:
+    def compute_target(self, controller_pose: Pose, translation_scale: float) -> Pose:
         """Return the target EE pose for the current controller pose.
 
-        Must only be called while engaged.
+        Must only be called while engaged. orientation is the reference EE
+        orientation, unchanged -- callers that need a real commanded
+        orientation must compute it themselves (see bridge_node.py's
+        _pointing_pose()).
         """
         assert self.engaged and self._ref_controller is not None and self._ref_ee is not None
 
@@ -54,16 +59,4 @@ class Clutch:
         target_pos = tuple(
             e + d for e, d in zip(self._ref_ee.position, delta_pos)
         )
-
-        # Rotation delta of the controller since engage, expressed as a
-        # quaternion; slerp from identity toward it scales the angle by
-        # `rotation_scale` while keeping the same axis.
-        delta_quat = tft.quaternion_multiply(
-            tft.quaternion_inverse(self._ref_controller.orientation),
-            controller_pose.orientation,
-        )
-        identity = (0.0, 0.0, 0.0, 1.0)
-        scaled_delta_quat = tft.quaternion_slerp(identity, delta_quat, rotation_scale)
-        target_quat = tft.quaternion_multiply(self._ref_ee.orientation, scaled_delta_quat)
-
-        return Pose(position=target_pos, orientation=tuple(target_quat))
+        return Pose(position=target_pos, orientation=self._ref_ee.orientation)

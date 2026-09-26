@@ -17,3 +17,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Runtime session logs (tee'd bridge_node/controller_raw_publisher output)
+logs/
