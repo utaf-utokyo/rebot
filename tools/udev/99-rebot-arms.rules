@@ -1,0 +1,9 @@
+# Fixed device names for the two reBot B601-DM USB-CAN adapters (HDSC 2e88:4603).
+# Both adapters report the same serial (00000000050C), so they can only be
+# told apart by the physical USB port (ID_PATH). ttyACM0/1 numbering is not stable.
+#
+# Install:
+#   sudo cp tools/udev/99-rebot-arms.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e88", ATTRS{idProduct}=="4603", ENV{ID_PATH}=="platform-NVDA8000:01-usb-0:1:1.0", SYMLINK+="rebot_left", MODE="0660", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e88", ATTRS{idProduct}=="4603", ENV{ID_PATH}=="platform-NVDA8000:02-usb-0:1:1.0", SYMLINK+="rebot_right", MODE="0660", GROUP="dialout"

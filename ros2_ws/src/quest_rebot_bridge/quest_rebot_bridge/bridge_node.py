@@ -100,6 +100,7 @@ _HOMING_ROTATION_TOLERANCE_RAD = 0.02
 _PRIMARY_CLICK_THRESHOLD = 0.5
 _HEARTBEAT_PERIOD_S = 1.0
 _GRIPPER_INIT_DELAY_S = 1.0
+_STARTUP_HOME_POLL_S = 0.5
 # rebot_bringup/config/rebotarm_hardware.yaml (model=dm): gripper.position_limits
 # open=-5.0 close=0.0 rad. The real B601-DM gripper opens very wide at that
 # extreme, so "open" here targets 1/3 of that travel rather than the full
@@ -239,6 +240,19 @@ class QuestRebotBridgeNode(Node):
         self.create_timer(_STALE_CHECK_PERIOD_S, self._check_stale)
         self.create_timer(_HOMING_STEP_PERIOD_S, self._homing_step)
         self.create_timer(_HEARTBEAT_PERIOD_S, self._log_heartbeat)
+        # Fixed rotation, in ee_frame's own local frame, from ee_frame to the
+        # frame the move_to_pose_ik backend actually solves for. Applied only
+        # to the orientation sent over the service (targets, TF lookups and
+        # the published target_pose all stay in ee_frame). The real
+        # rebotarmcontroller solves for ReBot_Arm_DM.urdf's end_link, which
+        # shares gripper_link's position exactly but is rotated 180deg about
+        # local X (checked via FK, 2026-09-27) -- without [1,0,0,0] here, IK
+        # against the real arm mostly fails and, when it does converge,
+        # flips joint6 by ~180deg in a single step. fake_ik_driver solves
+        # for gripper_link directly, so identity is right for simulation.
+        self._ik_orientation_offset = tuple(
+            self._declare_double_array("ik_orientation_offset_xyzw", [0.0, 0.0, 0.0, 1.0])
+        )
         arm_namespace = self._declare_str("arm_namespace", "rebotarm")
         self._move_ik_client = self.create_client(
             MoveToPoseIK, f"/{arm_namespace}/move_to_pose_ik"
@@ -252,6 +266,16 @@ class QuestRebotBridgeNode(Node):
         self._gripper_init_timer = self.create_timer(
             _GRIPPER_INIT_DELAY_S, self._init_gripper_once
         )
+        # Same home reset as the A/X button, started automatically once the
+        # IK service and the actual EE TF are both up. The real arms power up
+        # in the folded zero pose, where engaging the clutch directly can't
+        # converge (see README), so without this the operator had to press
+        # A/X before the first squeeze. Squeezing still cancels it.
+        self._startup_home_timer = None
+        if self._declare_bool("home_on_startup", False):
+            self._startup_home_timer = self.create_timer(
+                _STARTUP_HOME_POLL_S, self._start_homing_when_ready
+            )
         self.get_logger().info(
             f"quest_rebot_bridge_node up: side={self._arm_side} "
             f"controller_data={controller_data_topic} target_pose={target_pose_topic} "
@@ -264,6 +288,10 @@ class QuestRebotBridgeNode(Node):
     def _declare_str(self, name: str, default: str) -> str:
         self.declare_parameter(name, default)
         return str(self.get_parameter(name).value)
+
+    def _declare_bool(self, name: str, default: bool) -> bool:
+        self.declare_parameter(name, default)
+        return bool(self.get_parameter(name).value)
 
     def _declare_float(self, name: str, default: float) -> float:
         self.declare_parameter(name, default)
@@ -369,7 +397,7 @@ class QuestRebotBridgeNode(Node):
         req.target_pose.position.x, req.target_pose.position.y, req.target_pose.position.z = (
             pose.position
         )
-        qx, qy, qz, qw = pose.orientation
+        qx, qy, qz, qw = tft.quaternion_multiply(pose.orientation, self._ik_orientation_offset)
         req.target_pose.orientation.x = qx
         req.target_pose.orientation.y = qy
         req.target_pose.orientation.z = qz
@@ -457,6 +485,15 @@ class QuestRebotBridgeNode(Node):
         self._last_target = None
         self._homing = True
         self.get_logger().info("home reset requested (primary button)")
+
+    def _start_homing_when_ready(self) -> None:
+        if not self._move_ik_client.service_is_ready() or self._lookup_ee_pose() is None:
+            return
+        self._startup_home_timer.cancel()
+        if self._clutch.engaged:
+            return
+        self.get_logger().info("startup: moving to home pose")
+        self._start_homing()
 
     def _homing_step(self) -> None:
         if not self._homing or self._ik_future is not None:

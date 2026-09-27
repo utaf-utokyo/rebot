@@ -25,8 +25,7 @@ B601-DM
 - Python 3.12
 - ROS 2 Jazzy
 - Meta Quest 3 (Developer Mode) + NVIDIA CloudXR
-- 対象ロボット: reBot Arm B601-DM (Damiao motor 版) 1台
-  （将来的に2台での二腕テレオペを想定した設計）
+- 対象ロボット: reBot Arm B601-DM (Damiao motor 版) 2台（左右）
 
 ## リポジトリ構成
 
@@ -82,22 +81,153 @@ clutch OFF時停止）の詳細設計は [docs/architecture.md](docs/architectur
 | M3 | reBot ROS 2 stack を非実機で起動し joint_states/TF/robot model 確認 | 完了 |
 | M4 | Quest抜き・固定小 target pose で実機 command 経路を検証 | **完了** |
 | M5 | Quest接続、低速・小スケール・clutch必須の片腕テレオペ初回 | **完了（下記参照）** |
+| M6 | 実機B601-DM 2台（左右）でのQuest二腕テレオペ | **完了（2026-09-27）** |
 
-## 現在の状態（2026-09-26時点）
+## 現在の状態（2026-09-27時点）
 
-**M5完了。** 当初（2026-09-15）は実Quest 3を繋いでもRVizで腕が全く反応せず
-原因不明だったが、その後の複数セッションで段階的に原因を特定・修正し
-（`ee_frame`不一致、`quest_world`キャリブレーション未実施、IK失敗時に
-目標姿勢がドリフトするバグ、姿勢固定化とhome姿勢の不整合、大学Wi-Fiの
-輻輳など — 詳細は以下の各日付セクション参照）、実Quest 3 +
-`dual_arm_rehearsal.launch.py`（シミュレーション、実アームは未接続）での
-テレオペ（squeezeクラッチによる相対位置追従、エンドエフェクタ姿勢は常に
-鉛直下向き固定、ロールのみ右スティックで操作）を2026-09-26に確認済み。
+**M6完了。** 実機B601-DM 2台（左右）を、実Quest 3の左右コントローラーで
+同時にテレオペできることを2026-09-27に確認した。起動手順・セットアップは
+下記「[実機二腕テレオペ（M6）](#実機二腕テレオペm62026-09-27)」を参照。
 
-**次のステップ**: 実機B601-DMでのテレオペ（M4で確認済みの`move_to_pose_ik`
-実機経路と、M5で確認したQuest入力パイプラインを接続する）。
-`home_position`/`workspace_max`はシミュレーションモデルのIK検証のみに
-基づく値のため、実機の関節限界・取り付け向きとの整合を再確認してから行うこと。
+M5（2026-09-26）までは、実Quest 3 + `dual_arm_rehearsal.launch.py`
+（シミュレーション）でのテレオペを確認していた。操作方法は、squeezeクラッチに
+よる相対位置追従、エンドエフェクタ姿勢は常に鉛直下向き固定、ロールのみ
+右スティックで操作。途中で直した問題（`ee_frame`不一致、`quest_world`
+キャリブレーション未実施、IK失敗時に目標姿勢がドリフトするバグ、姿勢固定化と
+home姿勢の不整合、大学Wi-Fiの輻輳など）の詳細は、以下の各日付セクションを参照。
+
+## 実機二腕テレオペ（M6、2026-09-27）
+
+`launch/dual_arm_real.launch.py` を使う。構成は `dual_arm_rehearsal.launch.py`
+と同じで、左右それぞれの `fake_ik_driver` を実機の `reBotArmController` に
+置き換えたもの。
+
+### 一度だけ必要なセットアップ
+
+1. **モータID（DMTool）**: 左右とも同じIDでよい（CAN ID `0x01`〜`0x07` /
+   Master ID `0x11`〜`0x17`、joint1〜6・gripperの順）。アダプタが左右で
+   別なのでCANバスも別になり、IDがかぶっても衝突しない。新品のモータは全部
+   `0x01`/`0x00` なので、**1個ずつつないで**設定する。DMToolは
+   `assemble_rebot/motor-debugging-tool/Linux/arm64/DMTool-v2.1.8.1-arm64/start.sh`
+   （vendorクローン、`.gitignore`対象）。
+2. **ゼロ点（DMTool）**: アームを組み立てガイドの折りたたみ姿勢にし、
+   Debugタブの **Save Zero（保存零点）** を7個それぞれで押す。グリッパーは
+   閉じた状態で行う。確認するには、折りたたみ姿勢でモーター位置を読み、
+   全部0°付近であればよい（2026-09-27の実測は左右とも±5°以内）。
+3. **USBポートの固定名（udev）**: 2つのUSB-CANアダプタはシリアル番号が同じ
+   （`00000000050C`）なので、**挿しているUSBポートで区別する**。
+   ```bash
+   sudo cp tools/udev/99-rebot-arms.rules /etc/udev/rules.d/
+   sudo udevadm control --reload-rules && sudo udevadm trigger
+   ls -l /dev/rebot_*   # rebot_left / rebot_right ができていればOK
+   ```
+   左＝`NVDA8000:01`、右＝`NVDA8000:02` のポート。**別のポートに挿すと名前が
+   つかない**。確認は `udevadm info -q property -n /dev/ttyACM0 | grep ID_PATH=`。
+
+### 起動手順
+
+事前に、アームを左右とも折りたたみ姿勢にし、24V電源をONにする。DMToolは
+閉じておく（ポートを使っていると制御プログラムがつなげない）。QuestとPCは同じ
+ネットワークにつなぐ（テザリング推奨、下記M5の手順を参照）。
+
+```bash
+# ターミナル1: 実機2台 + bridge_node(左右) + RViz
+source ~/rebot/.venv-motorbridge/bin/activate
+source /opt/ros/jazzy/setup.bash
+source ~/rebot/ros2_ws/install/setup.bash
+ros2 launch quest_rebot_bridge dual_arm_real.launch.py translation_scale:=0.5 \
+  2>&1 | tee ~/rebot/logs/$(date +%H%M%S)_dual_arm_real.log
+```
+
+```bash
+# ターミナル2: controller_raw_publisher（isaacteleop venv、Questと接続）
+source /opt/ros/jazzy/setup.bash
+source ~/rebot/.venv-teleop-ros2/bin/activate
+cd ~/rebot/ros2_ws/src/quest_rebot_bridge
+python3 -m quest_rebot_bridge.controller_raw_publisher \
+  2>&1 | tee ~/rebot/logs/$(date +%H%M%S)_controller_raw.log
+```
+
+Quest側では、ヘッドセット内ブラウザでCloudXRクライアントを開き、Server IP
+（`ip -4 addr show wlP9s9`）とPort `48322` を手入力して接続する。
+
+**起動時の挙動（注意）**: 起動すると両腕のモータが即座にONになり、その場の
+姿勢を保持する。約1秒後にグリッパーが開き、続いて**両腕が自動で
+折りたたみ姿勢からホーム位置へ移動する**（`home_on_startup`、約2秒）。
+起動前にアーム周辺に人や物がないことを確認すること。自動移動を止めたい
+場合は `home_on_startup:=false` を付ける。折りたたみ姿勢のまま握っても
+IKが解けないので、その場合は先にA/Xでホームへ戻す。
+
+**操作**:
+- グリップを握っている間: 手の動きに追従する（`translation_scale`倍）
+- 離す: その場で保持する
+- トリガー: グリッパーを開閉する
+- 右スティックの左右: 手首ロールを回す
+- A（右）/X（左）: ホームへ戻る
+
+**終了**: ターミナル1で `Ctrl-C`。各アームが折りたたみ姿勢へ戻ってから
+モータがOFFになる。
+
+主なlaunch引数:
+- `translation_scale`（既定1.0、上の例では0.5）
+- `home_on_startup`（既定true）
+- `left_channel`/`right_channel`（既定 `/dev/rebot_left`/`/dev/rebot_right`）
+- `{left,right}_calib_q{x,y,z,w}`
+- `fake_hardware`（下記）
+- `rviz`
+
+### キャリブレーション（左右別）
+
+`quest_world → {side}/base_link` の回転は、**左右それぞれ実機で測った値**を
+launchの既定値にしている（2026-09-27測定、左右で約27°違う）。この日の値は
+2026-09-16の値（`dual_arm_rehearsal`が今も使っている共通の値）から約65°
+ずれていた。Questのガーディアン再設定や向きのリセットをしたら、左右とも
+測り直す。
+
+測り直しは、アームのlaunchを止め（A/Xを押すとホームに戻る動作が始まるため）、
+`controller_raw_publisher`は起動したままで行う:
+
+```bash
+ros2 run quest_rebot_bridge quest_world_calibrate --ros-args -p arm_side:=right
+# Aを押しっぱなしで、右アームが前に伸びる方向へ水平に15cm以上押し出して離す
+ros2 run quest_rebot_bridge quest_world_calibrate --ros-args -p arm_side:=left
+# Xで同様に、左アームの前方向へ
+```
+
+表示された値は、`right_calib_qx:=... right_calib_qy:=...`（左も同様）の形で
+launch引数に渡す。常用する値なら、`dual_arm_real.launch.py`の既定値を
+書き換える。
+
+### 実機を使わないリハーサル
+
+```bash
+ros2 launch quest_rebot_bridge dual_arm_real.launch.py fake_hardware:=true
+```
+
+実機の制御プログラムと**同じモデル**（`ReBot_Arm_DM.urdf` / `end_link`、
+折りたたみ姿勢から開始）の `fake_ik_driver` に置き換えて、同じ構成を起動する。
+2026-09-27に、折りたたみ姿勢からのホーム移動と左右±XYZの追従を、
+`tools/check_dual_arm_tracking.py` をこのモード向けにした版で確認済み。
+
+### M6で見つけて直した問題
+
+- **`end_link`と`gripper_link`は向きが180°違う**: 実機の制御プログラムは
+  `ReBot_Arm_DM.urdf`の`end_link`に対してIKを解く。一方、`bridge_node`は
+  `gripper_link`の姿勢を送っている。2つは位置は同じだが、ローカルX軸まわりに
+  180°回っている（FKで確認）。補正なしだと、実機のIKはほぼ失敗し、解けても
+  1ステップでjoint6が約180°跳ねる（シミュレーションで確認）。
+  `bridge_node`に`ik_orientation_offset_xyzw`（既定は恒等回転、
+  `dual_arm_real`では`[1,0,0,0]`）を追加し、IKサービスへ送る姿勢にだけ掛ける。
+- **SDKはポート名が`/dev/tty`で始まるときだけUSBシリアルとして扱う**:
+  `reBotArm_control_py/actuator/rebotarm.py`。`/dev/rebot_left`のような名前を
+  そのまま渡すとSocketCANのインターフェース名と解釈され、
+  `if_nametoindex failed ... No such device` で起動直後に落ちる。
+  `dual_arm_real`はlaunch時に`realpath`で`/dev/ttyACM*`へ変換してから渡す。
+- 2台を同時に動かすため、`dual_arm_real`では左右の`reBotArmController`の
+  ノード名を`reBotArmController_left`/`_right`、名前空間を`rebotarm_left`/
+  `_right`に分けている。
+
+## 過去の記録（M4〜M5）
 
 以下は2026-09-15時点の記録（当時の未解決事象の詳細、その後すべて解決済み）。
 
